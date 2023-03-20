@@ -64,15 +64,13 @@ pub struct Metadata {
 
 pub const MAGIC_TRAILER: &[u8; 8] = b"d3n0l4nd";
 
-/// This function will try to run this binary as a standalone binary
-/// produced by `deno compile`. It determines if this is a standalone
-/// binary by checking for the magic trailer string `d3n0l4nd` at EOF-24.
-/// The magic trailer is followed by:
-/// - a u64 pointer to the JS bundle embedded in the binary
-/// - a u64 pointer to JSON metadata (serialized flags) embedded in the binary
-/// These are dereferenced, and the bundle is executed under the configuration
-/// specified by the metadata. If no magic trailer is present, this function
-/// exits with `Ok(None)`.
+/// 输出:
+/// 该函数将尝试作为由 deno compile 生成的独立二进制文件运行此二进制文件。
+/// 它通过检查 EOF-24 处的魔术尾缀字符串 d3n0l4nd 来确定是否为独立二进制文件。
+/// 魔术尾缀后面跟着：
+/// - 嵌入在二进制文件中的 JS 捆绑包的 u64 指针
+/// - 嵌入在二进制文件中的 JSON 元数据（序列化标志）的 u64 指针
+/// 这些指针被解除引用，并在元数据指定的配置下执行捆绑包。如果不存在魔术尾缀，则该函数以 Ok(None) 退出。
 pub async fn extract_standalone(
   args: Vec<String>,
 ) -> Result<Option<(Metadata, eszip::EszipV2)>, AnyError> {

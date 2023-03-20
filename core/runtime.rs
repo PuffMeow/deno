@@ -168,6 +168,7 @@ pub(crate) struct ContextState {
 
 /// Internal state for JsRuntime which is stored in one of v8::Isolate's
 /// embedder slots.
+/// JS 运行时的内部状态，存在在其中一个 v8::Isolate 分区的嵌入插槽中
 pub struct JsRuntimeState {
   global_realm: Option<JsRealm>,
   known_realms: Vec<v8::Weak<v8::Context>>,
@@ -232,6 +233,7 @@ fn v8_init(
 pub const V8_WRAPPER_TYPE_INDEX: i32 = 0;
 pub const V8_WRAPPER_OBJECT_INDEX: i32 = 1;
 
+// JS 运行时配置
 #[derive(Default)]
 pub struct RuntimeOptions {
   /// Source map reference for errors.
@@ -246,6 +248,7 @@ pub struct RuntimeOptions {
   ///
   /// If not provided runtime will error if code being
   /// executed tries to load modules.
+  /// 实现 moduleLoader 用来处理 v8 去加载 ES 模块，如果不提供该项就会在运行时报错。
   pub module_loader: Option<Rc<dyn ModuleLoader>>,
 
   /// JsRuntime extensions, not to be confused with ES modules.
@@ -255,13 +258,16 @@ pub struct RuntimeOptions {
   ///
   /// If you are creating a runtime from a snapshot take care not to include
   /// JavaScript sources in the extensions.
+  /// JS 运行时扩展
   pub extensions: Vec<Extension>,
 
   /// V8 snapshot that should be loaded on startup.
+  /// 在启动的时候被加载的 v8 快照
   pub startup_snapshot: Option<Snapshot>,
 
   /// Prepare runtime to take snapshot of loaded code.
   /// The snapshot is deterministic and uses predictable random numbers.
+  /// 准备运行时去从加载的代码中取得快照信息
   pub will_snapshot: bool,
 
   /// An optional callback that will be called for each module that is loaded
@@ -274,6 +280,7 @@ pub struct RuntimeOptions {
 
   /// V8 platform instance to use. Used when Deno initializes V8
   /// (which it only does once), otherwise it's silenty dropped.
+  /// 初始化 v8 platform 实例。当 deno 初始化的时候只会启动一次，否则就会静默销毁
   pub v8_platform: Option<v8::SharedRef<v8::Platform>>,
 
   /// The store to use for transferring SharedArrayBuffers between isolates.
@@ -281,6 +288,7 @@ pub struct RuntimeOptions {
   /// SharedArrayBuffers, they should use the same [SharedArrayBufferStore]. If
   /// no [SharedArrayBufferStore] is specified, SharedArrayBuffer can not be
   /// serialized.
+  /// 在 v8 的 isolates 中传输 sharedArrayBuffers 数据。共享内存
   pub shared_array_buffer_store: Option<SharedArrayBufferStore>,
 
   /// The store to use for transferring `WebAssembly.Module` objects between
@@ -292,10 +300,12 @@ pub struct RuntimeOptions {
   pub compiled_wasm_module_store: Option<CompiledWasmModuleStore>,
 
   /// Start inspector instance to allow debuggers to connect.
+  /// 是否启动检查器，方便调试
   pub inspector: bool,
 
   /// Describe if this is the main runtime instance, used by debuggers in some
   /// situation - like disconnecting when program finishes running.
+  /// 声明实例是否是主运行时
   pub is_main: bool,
 }
 
@@ -307,6 +317,7 @@ impl Drop for JsRuntime {
   }
 }
 
+// 实现 JS 运行时
 impl JsRuntime {
   const STATE_DATA_OFFSET: u32 = 0;
   const MODULE_MAP_DATA_OFFSET: u32 = 1;
@@ -321,6 +332,7 @@ impl JsRuntime {
     // Add builtins extension
     // TODO(bartlomieju): remove this in favor of `SnapshotOptions`.
     let has_startup_snapshot = options.startup_snapshot.is_some();
+    // 如果没有启动快照，注入 core 和 error js esm 模块
     if !has_startup_snapshot {
       options
         .extensions
@@ -2047,8 +2059,8 @@ impl JsRuntime {
     resolved_any
   }
 
+  /// 异步加载指定的模块和它所有的相关依赖
   /// Asynchronously load specified module and all of its dependencies.
-  ///
   /// The module will be marked as "main", and because of that
   /// "import.meta.main" will return true when checked inside that module.
   ///

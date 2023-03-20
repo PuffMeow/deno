@@ -250,6 +250,7 @@ pub fn main() {
     // TODO(bartlomieju): doesn't handle exit code set by the runtime properly
     unwrap_or_exit(standalone_res);
 
+    // 处理一些权限系统，比如 --allow-net 等
     let flags = match flags_from_vec(args) {
       Ok(flags) => flags,
       Err(err @ clap::Error { .. })
@@ -266,9 +267,11 @@ pub fn main() {
 
     util::logger::init(flags.log_level);
 
+    // 运行命令行 比如 deno run 匹配 DenoSubcommand::RUN
     run_subcommand(flags).await
   };
 
+  // 创建 tokio 异步运行时
   let exit_code = unwrap_or_exit(run_local(future));
 
   std::process::exit(exit_code);

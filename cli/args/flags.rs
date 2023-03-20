@@ -307,6 +307,9 @@ pub enum CaData {
   Bytes(Vec<u8>),
 }
 
+
+
+/// 用户输入的命令行参数
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub struct Flags {
   /// Vector of CLI arguments - these are user script arguments, all Deno

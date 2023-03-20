@@ -346,6 +346,7 @@ pub struct WebWorkerOptions {
   pub stdio: Stdio,
 }
 
+// Workder 的实现
 impl WebWorker {
   pub fn bootstrap_from_options(
     name: String,
@@ -356,7 +357,9 @@ impl WebWorker {
   ) -> (Self, SendableWebWorkerHandle) {
     let bootstrap_options = options.bootstrap.clone();
     let (mut worker, handle) =
+    // from_options 注入配置以及 rust to js API
       Self::from_options(name, permissions, main_module, worker_id, options);
+    // 启动 Worker
     worker.bootstrap(&bootstrap_options);
     (worker, handle)
   }
@@ -473,6 +476,7 @@ impl WebWorker {
     let startup_snapshot = options.startup_snapshot
       .expect("deno_runtime startup snapshot is not available with 'create_runtime_snapshot' Cargo feature.");
 
+    // JS 运行时的实现
     let mut js_runtime = JsRuntime::new(RuntimeOptions {
       module_loader: Some(options.module_loader.clone()),
       startup_snapshot: Some(startup_snapshot),
@@ -546,6 +550,7 @@ impl WebWorker {
     )
   }
 
+  // 启动整个程序的地方
   pub fn bootstrap(&mut self, options: &BootstrapOptions) {
     // Instead of using name for log we use `worker-${id}` because
     // WebWorkers can have empty string as name.
@@ -582,6 +587,7 @@ impl WebWorker {
   }
 
   /// See [JsRuntime::execute_script](deno_core::JsRuntime::execute_script)
+  /// 执行 JS 代码
   pub fn execute_script(
     &mut self,
     name: &str,
@@ -592,6 +598,7 @@ impl WebWorker {
   }
 
   /// Loads and instantiates specified JavaScript module as "main" module.
+  /// 加载、实例化指定 JS 模块作为主要模块
   pub async fn preload_main_module(
     &mut self,
     module_specifier: &ModuleSpecifier,
@@ -603,6 +610,7 @@ impl WebWorker {
   }
 
   /// Loads and instantiates specified JavaScript module as "side" module.
+  /// 加载、实例化指定 JS 模块作为边缘模块
   pub async fn preload_side_module(
     &mut self,
     module_specifier: &ModuleSpecifier,
@@ -642,6 +650,8 @@ impl WebWorker {
   /// Loads, instantiates and executes specified JavaScript module.
   ///
   /// This module will have "import.meta.main" equal to true.
+  /// 
+  /// 加载、实例化和执行指定的 JS 模块
   pub async fn execute_main_module(
     &mut self,
     id: ModuleId,
