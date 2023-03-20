@@ -46,12 +46,16 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
+/// 元数据
 #[derive(Deserialize, Serialize)]
 pub struct Metadata {
+  /// 收集到的命令行参数
   pub argv: Vec<String>,
   pub unstable: bool,
   pub seed: Option<u64>,
+  /// 运行的权限
   pub permissions: PermissionsOptions,
+  /// 文件位置
   pub location: Option<Url>,
   pub v8_flags: Vec<String>,
   pub log_level: Option<Level>,
@@ -59,6 +63,7 @@ pub struct Metadata {
   pub ca_data: Option<Vec<u8>>,
   pub unsafely_ignore_certificate_errors: Option<Vec<String>>,
   pub maybe_import_map: Option<(Url, String)>,
+  /// 入口文件路径
   pub entrypoint: ModuleSpecifier,
 }
 
@@ -74,13 +79,16 @@ pub const MAGIC_TRAILER: &[u8; 8] = b"d3n0l4nd";
 pub async fn extract_standalone(
   args: Vec<String>,
 ) -> Result<Option<(Metadata, eszip::EszipV2)>, AnyError> {
+  // 获得当前可执行命令行文件的完整路径
   let current_exe_path = current_exe()?;
-
+  // 打开它
   let file = std::fs::File::open(current_exe_path)?;
 
+  // 缓存读取器
   let mut bufreader =
     deno_core::futures::io::BufReader::new(AllowStdIo::new(file));
 
+  // 拿出它的尾部来看看
   let trailer_pos = bufreader.seek(SeekFrom::End(-24)).await?;
   let mut trailer = [0; 24];
   bufreader.read_exact(&mut trailer).await?;
@@ -97,6 +105,8 @@ pub async fn extract_standalone(
 
   bufreader.seek(SeekFrom::Start(eszip_archive_pos)).await?;
 
+  // eszip 可以下载JavaScript和TypeScript模块图，并将它们存储在本地一个特殊的zip文件中
+  // 返回的 eszip 包含了模块图信息
   let (eszip, loader) = eszip::EszipV2::parse(bufreader)
     .await
     .context("Failed to parse eszip header")?;
@@ -107,6 +117,7 @@ pub async fn extract_standalone(
 
   let mut metadata = String::new();
 
+  // 读取模块图中的元数据信息
   bufreader
     .take(metadata_len)
     .read_to_string(&mut metadata)

@@ -226,6 +226,7 @@ fn unwrap_or_exit<T>(result: Result<T, AnyError>) -> T {
   }
 }
 
+// 主要命令行运行入口
 pub fn main() {
   setup_panic_hook();
 
@@ -238,6 +239,7 @@ pub fn main() {
     Box::new(util::draw_thread::DrawThread::show),
   );
 
+  // 收集命令行参数
   let args: Vec<String> = env::args().collect();
 
   // 最后返回一个 future 任务
