@@ -240,6 +240,7 @@ pub fn main() {
 
   let args: Vec<String> = env::args().collect();
 
+  // 最后返回一个 future 任务
   let future = async move {
     let standalone_res =
       match standalone::extract_standalone(args.clone()).await {
@@ -271,7 +272,8 @@ pub fn main() {
     run_subcommand(flags).await
   };
 
-  // 创建 tokio 异步运行时
+  // unwrap_or_exit 使用 anyhow 来处理错误，打印错误信息并退出进程
+  // run_local创建 tokio 异步运行时，最大线程数 32 个
   let exit_code = unwrap_or_exit(run_local(future));
 
   std::process::exit(exit_code);
