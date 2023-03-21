@@ -63,7 +63,7 @@ pub struct Metadata {
   pub ca_data: Option<Vec<u8>>,
   pub unsafely_ignore_certificate_errors: Option<Vec<String>>,
   pub maybe_import_map: Option<(Url, String)>,
-  /// 入口文件路径
+  /// 主要入口模块
   pub entrypoint: ModuleSpecifier,
 }
 
@@ -72,6 +72,7 @@ pub const MAGIC_TRAILER: &[u8; 8] = b"d3n0l4nd";
 /// 输出:
 /// 该函数将尝试作为由 deno compile 生成的独立二进制文件运行此二进制文件。
 /// 它通过检查 EOF-24 处的魔术尾缀字符串 d3n0l4nd 来确定是否为独立二进制文件。
+///
 /// 魔术尾缀后面跟着：
 /// - 嵌入在二进制文件中的 JS 捆绑包的 u64 指针
 /// - 嵌入在二进制文件中的 JSON 元数据（序列化标志）的 u64 指针
@@ -88,11 +89,14 @@ pub async fn extract_standalone(
   let mut bufreader =
     deno_core::futures::io::BufReader::new(AllowStdIo::new(file));
 
-  // 拿出它的尾部来看看
+  // 取出尾缀来看看
   let trailer_pos = bufreader.seek(SeekFrom::End(-24)).await?;
   let mut trailer = [0; 24];
+  // 读取尾缀
   bufreader.read_exact(&mut trailer).await?;
+  // 魔法尾缀
   let (magic_trailer, rest) = trailer.split_at(8);
+  // 如果不是魔法尾缀直接返回 None
   if magic_trailer != MAGIC_TRAILER {
     return Ok(None);
   }
@@ -124,9 +128,12 @@ pub async fn extract_standalone(
     .await
     .context("Failed to read metadata from the current executable")?;
 
+  // json parse 成 Metadata 对象
   let mut metadata: Metadata = serde_json::from_str(&metadata).unwrap();
+  // 命令行参数放到元数据中
   metadata.argv.append(&mut args[1..].to_vec());
 
+  // 返回元数据和 eszip 模块图信息
   Ok(Some((metadata, eszip)))
 }
 
@@ -313,12 +320,17 @@ pub async fn run(
   eszip: eszip::EszipV2,
   metadata: Metadata,
 ) -> Result<(), AnyError> {
+  // metadata 转成 flag 用户输入的权限参数
   let flags = metadata_to_flags(&metadata);
+  // 主要运行模块的入口
   let main_module = &metadata.entrypoint;
+  // 获取共享的程序运行状态
   let ps = ProcState::build(flags).await?;
+  // 处理运行权限
   let permissions = PermissionsContainer::new(Permissions::from_options(
     &metadata.permissions,
   )?);
+  // 内嵌模块加载器
   let module_loader = Rc::new(EmbeddedModuleLoader {
     eszip: Arc::new(eszip),
     maybe_import_map_resolver: metadata.maybe_import_map.map(

@@ -69,6 +69,8 @@ use std::sync::Arc;
 /// This structure represents state of single "deno" program.
 ///
 /// It is shared by all created workers (thus V8 isolates).
+/// 这个结构体代表单个 deno 程序的状态
+/// 它的状态会被所有已经创建的 worker 共享
 #[derive(Clone)]
 pub struct ProcState(Arc<Inner>);
 

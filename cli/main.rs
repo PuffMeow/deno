@@ -246,6 +246,7 @@ pub fn main() {
   let future = async move {
     let standalone_res =
       match standalone::extract_standalone(args.clone()).await {
+        // standalone 执行独立运行包。
         Ok(Some((metadata, eszip))) => standalone::run(eszip, metadata).await,
         Ok(None) => Ok(()),
         Err(err) => Err(err),

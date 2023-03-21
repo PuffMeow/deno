@@ -26,6 +26,7 @@ use crate::npm::PackageJsonDepsInstaller;
 
 /// A resolver that takes care of resolution, taking into account loaded
 /// import map, JSX settings.
+/// 一个负责解析的解析器，考虑加载的导入映射和 JSX 设置
 #[derive(Debug, Clone)]
 pub struct CliGraphResolver {
   maybe_import_map: Option<Arc<ImportMap>>,
