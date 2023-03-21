@@ -356,6 +356,7 @@ pub async fn run(
   let options = WorkerOptions {
     bootstrap: BootstrapOptions {
       args: metadata.argv,
+      // 可用逻辑处理器， 我的电脑是 16
       cpu_count: std::thread::available_parallelism()
         .map(|p| p.get())
         .unwrap_or(1),
@@ -404,9 +405,12 @@ pub async fn run(
     permissions,
     options,
   );
+  // 拿到 worker 之后就执行主要模块
   worker.execute_main_module(main_module).await?;
+  // 派发加载事件
   worker.dispatch_load_event(&located_script_name!())?;
 
+  // 开始事件循环
   loop {
     worker.run_event_loop(false).await?;
     if !worker.dispatch_beforeunload_event(&located_script_name!())? {
@@ -414,6 +418,7 @@ pub async fn run(
     }
   }
 
+  // 派发卸载事件
   worker.dispatch_unload_event(&located_script_name!())?;
   std::process::exit(0);
 }
