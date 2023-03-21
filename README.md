@@ -2,6 +2,8 @@
 
 这是 deno 的源码阅读仓库，里面会有大量的阅读注释信息
 
+主要的运行入口在 cli -> main.rs
+
 # Deno
 
 [![Build Status - Cirrus][]][build status] [![Twitter handle][]][twitter badge]
