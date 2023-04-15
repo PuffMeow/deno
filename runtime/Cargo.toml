@@ -1,6 +1,11 @@
 # Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 [package]
+<<<<<<< HEAD
+=======
+name = "deno_runtime"
+version = "0.106.0"
+>>>>>>> 2184103a5ec7d7ae6fcfe2ecb79ad481498f5f8d
 authors.workspace = true
 description = "Provides the deno runtime library"
 edition.workspace = true
@@ -41,13 +46,13 @@ deno_core.workspace = true
 deno_crypto.workspace = true
 deno_fetch.workspace = true
 deno_ffi.workspace = true
-deno_flash.workspace = true
 deno_fs.workspace = true
 deno_http.workspace = true
 deno_io.workspace = true
 deno_napi.workspace = true
 deno_net.workspace = true
 deno_node.workspace = true
+deno_kv.workspace = true
 deno_tls.workspace = true
 deno_url.workspace = true
 deno_web.workspace = true
@@ -67,10 +72,10 @@ deno_core.workspace = true
 deno_crypto.workspace = true
 deno_fetch.workspace = true
 deno_ffi.workspace = true
-deno_flash.workspace = true
 deno_fs.workspace = true
 deno_http.workspace = true
 deno_io.workspace = true
+deno_kv.workspace = true
 deno_napi.workspace = true
 deno_net.workspace = true
 deno_node.workspace = true
@@ -104,6 +109,10 @@ uuid.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 fwdansi.workspace = true
+<<<<<<< HEAD
+=======
+winapi = { workspace = true, features = ["commapi", "knownfolders", "mswsock", "objbase", "psapi", "shlobj", "tlhelp32", "winbase", "winerror", "winuser", "winsock2"] }
+>>>>>>> 2184103a5ec7d7ae6fcfe2ecb79ad481498f5f8d
 ntapi = "0.4.0"
 winapi = {workspace = true, features = ["commapi", "knownfolders", "mswsock", "objbase", "psapi", "shlobj", "tlhelp32", "winbase", "winerror", "winsock2"]}
 
