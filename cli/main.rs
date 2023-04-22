@@ -42,6 +42,7 @@ use deno_runtime::colors;
 use deno_runtime::fmt_errors::format_js_error;
 use deno_runtime::tokio_util::run_local;
 use std::env;
+use std::env::current_exe;
 use std::path::PathBuf;
 
 async fn run_subcommand(flags: Flags) -> Result<i32, AnyError> {
@@ -249,8 +250,11 @@ pub fn main() {
 
   // 最后返回一个 future 任务
   let future = async move {
+    let current_exe_path = current_exe()?;
     let standalone_res =
-      match standalone::extract_standalone(args.clone()).await {
+      match standalone::extract_standalone(&current_exe_path, args.clone())
+        .await
+      {
         // standalone 执行独立运行包。
         Ok(Some((metadata, eszip))) => standalone::run(eszip, metadata).await,
         Ok(None) => Ok(()),
