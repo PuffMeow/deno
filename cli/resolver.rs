@@ -27,12 +27,8 @@ use crate::util::sync::AtomicFlag;
 
 /// A resolver that takes care of resolution, taking into account loaded
 /// import map, JSX settings.
-<<<<<<< HEAD
 /// 一个负责解析的解析器，考虑加载的导入映射和 JSX 设置
-#[derive(Debug, Clone)]
-=======
 #[derive(Debug)]
->>>>>>> 2184103a5ec7d7ae6fcfe2ecb79ad481498f5f8d
 pub struct CliGraphResolver {
   maybe_import_map: Option<Arc<ImportMap>>,
   maybe_default_jsx_import_source: Option<String>,
