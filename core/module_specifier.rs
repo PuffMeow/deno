@@ -103,6 +103,8 @@ pub fn resolve_url(
   Url::parse(url_str).map_err(ModuleResolutionError::InvalidUrl)
 }
 
+/// 解析一个网络http/https/git+ssh形式的 url ，或者一个本地执行文件路径
+/// 
 /// Takes a string representing either an absolute URL or a file path,
 /// as it may be passed to deno as a command line argument.
 /// The string is interpreted as a URL if it starts with a valid URI scheme,

@@ -206,6 +206,7 @@ fn setup_panic_hook() {
   }));
 }
 
+/// unwrap 取值或者错误时退出
 fn unwrap_or_exit<T>(result: Result<T, AnyError>) -> T {
   match result {
     Ok(value) => value,
@@ -259,6 +260,7 @@ pub fn main() {
     unwrap_or_exit(standalone_res);
 
     // 处理一些权限系统，比如 --allow-net 等
+    // 比如输入 deno run main.ts，会解析对应参数然后全部写入到 flags 变量中
     let flags = match flags_from_vec(args) {
       Ok(flags) => flags,
       Err(err @ clap::Error { .. })
@@ -271,8 +273,10 @@ pub fn main() {
       Err(err) => unwrap_or_exit(Err(AnyError::from(err))),
     };
 
+    // 初始化 v8 引擎参数，如果参数设置有错就直接退出
     init_v8_flags(&flags.v8_flags, get_v8_flags_from_env());
 
+    // 初始化 logger，控制台日志
     util::logger::init(flags.log_level);
 
     // 运行命令行 比如 deno run 匹配 DenoSubcommand::RUN

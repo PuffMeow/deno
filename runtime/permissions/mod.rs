@@ -1762,6 +1762,7 @@ impl Permissions {
   }
 }
 
+/// 权限结构体，具有内部可变性，可以跨线程，比如可以传递到 Web Worker 中
 /// Wrapper struct for `Permissions` that can be shared across threads.
 ///
 /// We need a way to have internal mutability for permissions as they might get

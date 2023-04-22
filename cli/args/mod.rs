@@ -381,6 +381,7 @@ fn resolve_lint_rules_options(
   }
 }
 
+/// 寻找 package.json 文件
 /// Discover `package.json` file. If `maybe_stop_at` is provided, we will stop
 /// crawling up the directory tree at that path.
 fn discover_package_json(
@@ -401,6 +402,7 @@ fn discover_package_json(
   Ok(None)
 }
 
+/// 根据传递的参数和环境创建并填充根证书存储区
 /// Create and populate a root cert store based on the passed options and
 /// environment.
 pub fn get_root_cert_store(
@@ -562,17 +564,22 @@ impl CliOptions {
   }
 
   pub fn from_flags(flags: Flags) -> Result<Self, AnyError> {
+    // 获取当前执行目录的绝对路径
     let initial_cwd =
       std::env::current_dir().with_context(|| "Failed getting cwd.")?;
+    // 寻找 deno.json / deno.jsonc 配置文件
     let maybe_config_file = ConfigFile::discover(&flags, &initial_cwd)?;
 
+    // 看是否有 package.json 文件
     let mut maybe_package_json = None;
+
     if flags.config_flag == ConfigFlag::Disabled
       || flags.no_npm
       || has_flag_env_var("DENO_NO_PACKAGE_JSON")
     {
       log::debug!("package.json auto-discovery is disabled")
     } else if let Some(config_file) = &maybe_config_file {
+      // 查找 deno.json 配置文件
       let specifier = config_file.specifier.clone();
       if specifier.scheme() == "file" {
         let maybe_stop_at = specifier
@@ -588,8 +595,10 @@ impl CliOptions {
       maybe_package_json = discover_package_json(&flags, None, &initial_cwd)?;
     }
 
+    // 寻找锁文件
     let maybe_lock_file =
       lockfile::discover(&flags, maybe_config_file.as_ref())?;
+
     Self::new(
       flags,
       initial_cwd,
@@ -744,6 +753,7 @@ impl CliOptions {
     }
   }
 
+  /// 处理 npm 包锁文件的快照
   pub async fn resolve_npm_resolution_snapshot(
     &self,
     api: &CliNpmRegistryApi,
@@ -771,6 +781,7 @@ impl CliOptions {
     Ok(None)
   }
 
+  // 如果主入口模块在 npm 包中，这就会被通过一个秘密环境变量给触发
   // If the main module should be treated as being in an npm package.
   // This is triggered via a secret environment variable which is used
   // for functionality like child_process.fork. Users should NOT depend

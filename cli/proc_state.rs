@@ -49,7 +49,7 @@ use std::sync::Arc;
 /// This structure represents state of single "deno" program.
 ///
 /// It is shared by all created workers (thus V8 isolates).
-/// 这个结构体代表单个 deno 程序的状态
+/// 这个结构体用于存储一个 deno 实例的状态
 /// 它的状态会被所有已经创建的 worker 共享
 #[derive(Clone)]
 pub struct ProcState(Arc<Inner>);
@@ -196,19 +196,35 @@ impl ProcState {
       }
       _ => {}
     }
+
+    // 用于存储二进制数据，具有内部可变性
     let blob_store = BlobStore::default();
+    // 存储广播通道中的生产者，最大容量256，生产者可以跨线程传递
+    // 发送者中携带 id、name、data: Arc<Vec<u8>>(u8数组引用计数)，可以被消费者监听并消费
     let broadcast_channel = InMemoryBroadcastChannel::default();
+    // 可以跨线程传递的 v8 sharedArrayBuffer
     let shared_array_buffer_store = SharedArrayBufferStore::default();
+    // 解析后的 wasm module store
     let compiled_wasm_module_store = CompiledWasmModuleStore::default();
+    // 依赖缓存的路径
     let deps_cache_location = dir.deps_folder_path();
+    // 网络依赖缓存
     let http_cache = HttpCache::new(&deps_cache_location);
+    // TLS 根证书存储区
     let root_cert_store = cli_options.resolve_root_cert_store()?;
+    // 缓存文件的配置，默认用于本地模块
     let cache_usage = cli_options.cache_setting();
+    // 处理网络的进度条
     let progress_bar = ProgressBar::new(ProgressBarStyle::TextOnly);
+
+    // reqwest 请求客户端实例
+    // 比如 deno run https://deno.land/std@0.183.0/examples/welcome.ts 就会调用网络请求
     let http_client = HttpClient::new(
       Some(root_cert_store.clone()),
       cli_options.unsafely_ignore_certificate_errors().clone(),
     )?;
+
+    // 用于获取文件
     let file_fetcher = FileFetcher::new(
       http_cache,
       cache_usage,
@@ -218,29 +234,39 @@ impl ProcState {
       Some(progress_bar.clone()),
     );
 
+    // 锁文件
     let lockfile = cli_options.maybe_lock_file();
-
+    // npm 仓库源地址，默认 https://registry.npmjs.org
     let npm_registry_url = CliNpmRegistryApi::default_url().to_owned();
+    // npm 缓存配置
     let npm_cache = Arc::new(NpmCache::from_deno_dir(
       &dir,
       cli_options.cache_setting(),
       http_client.clone(),
       progress_bar.clone(),
     ));
+
+    // npm 包的一些相关操作 api，比如获取包的信息，获取 npm 的 url 等
     let npm_api = Arc::new(CliNpmRegistryApi::new(
       npm_registry_url.clone(),
       npm_cache.clone(),
       http_client.clone(),
       progress_bar.clone(),
     ));
+
+    // 处理 npm 锁文件的快照
     let npm_snapshot = cli_options
       .resolve_npm_resolution_snapshot(&npm_api)
       .await?;
+
+    // npm 解析
     let npm_resolution = Arc::new(NpmResolution::from_serialized(
       npm_api.clone(),
       npm_snapshot,
       lockfile.as_ref().cloned(),
     ));
+
+    // 创建 npm 文件处理器
     let npm_fs_resolver = create_npm_fs_resolver(
       npm_cache,
       &progress_bar,
@@ -248,16 +274,22 @@ impl ProcState {
       npm_resolution.clone(),
       cli_options.node_modules_dir_path(),
     );
+
+    // npm 处理
     let npm_resolver = Arc::new(NpmPackageResolver::new(
       npm_resolution.clone(),
       npm_fs_resolver,
       lockfile.as_ref().cloned(),
     ));
+
+    // package.json 依赖下载
     let package_json_deps_installer = Arc::new(PackageJsonDepsInstaller::new(
       npm_api.clone(),
       npm_resolution.clone(),
       cli_options.maybe_package_json_deps(),
     ));
+
+    // import 的映射
     let maybe_import_map = cli_options
       .resolve_import_map(&file_fetcher)
       .await?
@@ -280,20 +312,25 @@ impl ProcState {
         file_paths: Arc::new(Mutex::new(vec![])),
       });
 
+    // ts 配置信息
     let ts_config_result =
       cli_options.resolve_ts_config_for_emit(TsConfigType::Emit)?;
     if let Some(ignored_options) = ts_config_result.maybe_ignored_options {
       warn!("{}", ignored_options);
     }
+    // ts emit 缓存
     let emit_cache = EmitCache::new(dir.gen_cache.clone());
+    // 解析后的源码缓存
     let parsed_source_cache =
       Arc::new(ParsedSourceCache::new(caches.dep_analysis_db(&dir)));
     let emit_options: deno_ast::EmitOptions = ts_config_result.ts_config.into();
+    // ts emitter
     let emitter = Arc::new(Emitter::new(
       emit_cache.clone(),
       parsed_source_cache.clone(),
       emit_options,
     ));
+    // npm 缓存
     let npm_cache = Arc::new(NpmCache::from_deno_dir(
       &dir,
       cli_options.cache_setting(),
@@ -301,19 +338,23 @@ impl ProcState {
       progress_bar.clone(),
     ));
     let file_fetcher = Arc::new(file_fetcher);
+    // node 分析缓存
     let node_analysis_cache =
       NodeAnalysisCache::new(caches.node_analysis_db(&dir));
+    // 翻译 node 代码
     let node_code_translator = Arc::new(NodeCodeTranslator::new(
       node_analysis_cache,
       file_fetcher.clone(),
       npm_resolver.clone(),
     ));
+    // 类型检查
     let type_checker = Arc::new(TypeChecker::new(
       dir.clone(),
       caches.clone(),
       cli_options.clone(),
       npm_resolver.clone(),
     ));
+    // 创建模块的 graph，记录各个模块之间的关系
     let module_graph_builder = Arc::new(ModuleGraphBuilder::new(
       cli_options.clone(),
       resolver.clone(),
@@ -325,6 +366,7 @@ impl ProcState {
       type_checker.clone(),
     ));
     let graph_container: Arc<ModuleGraphContainer> = Default::default();
+    // 准备模块加载
     let module_load_preparer = Arc::new(ModuleLoadPreparer::new(
       cli_options.clone(),
       graph_container.clone(),

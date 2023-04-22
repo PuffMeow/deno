@@ -895,6 +895,7 @@ pub struct TsConfigForEmit {
 /// For a given configuration type and optionally a configuration file,
 /// return a `TsConfig` struct and optionally any user configuration
 /// options that were ignored.
+/// 获取 ts 配置信息
 pub fn get_ts_config_for_emit(
   config_type: TsConfigType,
   maybe_config_file: Option<&ConfigFile>,

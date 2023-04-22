@@ -643,6 +643,7 @@ where
   Ok(rid)
 }
 
+/// 创建一个异步 reqwest 请求客户端实例
 /// Create new instance of async reqwest::Client. This client supports
 /// proxies and doesn't follow redirects.
 pub fn create_http_client(

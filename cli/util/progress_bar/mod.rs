@@ -268,8 +268,8 @@ impl ProgressBar {
     Self {
       inner: ProgressBarInner::new(match style {
         ProgressBarStyle::DownloadBars => {
-          Arc::new(renderer::BarProgressBarRenderer)
         }
+        Arc::new(renderer::BarProgressBarRenderer)
         ProgressBarStyle::TextOnly => {
           Arc::new(renderer::TextOnlyProgressBarRenderer)
         }

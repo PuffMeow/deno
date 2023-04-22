@@ -283,8 +283,6 @@ pub enum CaData {
   Bytes(Vec<u8>),
 }
 
-
-
 /// 用户输入的命令行参数
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub struct Flags {
@@ -619,6 +617,7 @@ To evaluate code in the shell:
 );
 
 /// Main entry point for parsing deno's command line flags.
+/// 主入口，用于解析 deno 的命令行参数
 pub fn flags_from_vec(args: Vec<String>) -> clap::error::Result<Flags> {
   let mut app = clap_root();
   let mut matches = app.try_get_matches_from_mut(&args)?;
@@ -695,6 +694,7 @@ fn handle_repl_flags(flags: &mut Flags, repl_flags: ReplFlags) {
   flags.subcommand = DenoSubcommand::Repl(repl_flags);
 }
 
+/// 创建 clap 实例，用于解析命令行参数
 fn clap_root() -> Command {
   let long_version = format!(
     "{} ({}, {})\nv8 {}\ntypescript {}",
@@ -739,8 +739,11 @@ fn clap_root() -> Command {
         .action(ArgAction::SetTrue)
         .global(true),
     )
+    /// deno bench
     .subcommand(bench_subcommand())
+    /// deno bundle
     .subcommand(bundle_subcommand())
+    /// deno cache
     .subcommand(cache_subcommand())
     .subcommand(check_subcommand())
     .subcommand(compile_subcommand())
@@ -756,10 +759,12 @@ fn clap_root() -> Command {
     .subcommand(lsp_subcommand())
     .subcommand(lint_subcommand())
     .subcommand(repl_subcommand())
+    /// deno run 运行
     .subcommand(run_subcommand())
     .subcommand(task_subcommand())
     .subcommand(test_subcommand())
     .subcommand(types_subcommand())
+    /// deno upgrade 升级 deno
     .subcommand(upgrade_subcommand())
     .subcommand(vendor_subcommand())
     .long_about(DENO_HELP)

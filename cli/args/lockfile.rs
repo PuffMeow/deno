@@ -74,6 +74,7 @@ pub fn discover(
   Ok(Some(lockfile))
 }
 
+/// 锁文件的快照
 pub async fn snapshot_from_lockfile(
   lockfile: Arc<Mutex<Lockfile>>,
   api: &CliNpmRegistryApi,
@@ -85,6 +86,7 @@ pub async fn snapshot_from_lockfile(
       HashMap::<NpmPackageReq, NpmPackageId>::with_capacity(
         lockfile.content.npm.specifiers.len(),
       );
+    // 收集指定的版本映射
     // collect the specifiers to version mappings
     for (key, value) in &lockfile.content.npm.specifiers {
       let package_req = NpmPackageReq::from_str(key)
@@ -98,6 +100,7 @@ pub async fn snapshot_from_lockfile(
     for (key, package) in &lockfile.content.npm.packages {
       let pkg_id = NpmPackageId::from_serialized(key)?;
 
+      // 收集依赖
       // collect the dependencies
       let mut dependencies = HashMap::with_capacity(package.dependencies.len());
       for (name, specifier) in &package.dependencies {

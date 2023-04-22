@@ -15,7 +15,9 @@ use crate::proc_state::ProcState;
 use crate::util;
 use crate::worker::create_main_worker;
 
+/// 运行指定的 js 文件
 pub async fn run_script(flags: Flags) -> Result<i32, AnyError> {
+  // 判断输入的权限指令是否正确，比如输入一个 --allow-unknow 就会报错
   if !flags.has_permission() && flags.has_permission_in_argv() {
     log::warn!(
       "{}",
@@ -34,20 +36,29 @@ To grant permissions, set them before the script argument. For example:
   // TODO(bartlomieju): actually I think it will also fail if there's an import
   // map specified and bare specifier is used on the command line - this should
   // probably call `ProcState::resolve` instead
+  // ProcState 存储一个 deno 实例的状态，它的状态会被所有已经创建的 worker 共享
+  // 内部存储了 deno 中会用到的二进制数据，可以跨线程传递数据的广播通道生产者和sharedArrayBuffer
+  // wasm 依赖信息，网络缓存、网络请求客户端，分析和翻译 node.js 代码，npm 的兼容和解析处理， 处理 TS 配置和类型检查，
+  // 构建模块的依赖关系，处理模块预加载需要的数据
   let ps = ProcState::from_flags(flags).await?;
 
   // Run a background task that checks for available upgrades. If an earlier
   // run of this background task found a new version of Deno.
+  // 在后台运行一个检查器查看 deno 是否可以升级
   super::upgrade::check_for_upgrades(
     ps.http_client.clone(),
     ps.dir.upgrade_check_file_path(),
   );
 
+  // 主入口模块
   let main_module = ps.options.resolve_main_module()?;
 
+  // 获取运行的权限，具有内部可变性，可以跨线程，比如可以传递到 Web Worker
   let permissions = PermissionsContainer::new(Permissions::from_options(
     &ps.options.permissions_options(),
   )?);
+
+  // 创建一个运行 js 程序的 worker
   let mut worker = create_main_worker(&ps, main_module, permissions).await?;
 
   let exit_code = worker.run().await?;
