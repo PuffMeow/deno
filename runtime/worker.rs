@@ -505,8 +505,10 @@ impl MainWorker {
     self.exit_code.get()
   }
 
+  /// 派发 加载 事件到 JS 运行时
   /// Dispatches "load" event to the JavaScript runtime.
   ///
+  /// 不轮询事件循环，因此不等待任何加载事件处理
   /// Does not poll event loop, and thus not await any of the "load" event handlers.
   pub fn dispatch_load_event(
     &mut self,
@@ -517,6 +519,8 @@ impl MainWorker {
       // NOTE(@bartlomieju): not using `globalThis` here, because user might delete
       // it. Instead we're using global `dispatchEvent` function which will
       // used a saved reference to global scope.
+      // 这里不使用' globalThis '，因为用户可能会删除它，
+      // 取而代之我们使用一个保存了引用到全局作用域的 dispatchEvent 函数
       ascii_str!("dispatchEvent(new Event('load'))"),
     )?;
     Ok(())

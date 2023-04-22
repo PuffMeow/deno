@@ -37,9 +37,9 @@ To grant permissions, set them before the script argument. For example:
   // map specified and bare specifier is used on the command line - this should
   // probably call `ProcState::resolve` instead
   // ProcState 存储一个 deno 实例的状态，它的状态会被所有已经创建的 worker 共享
-  // 内部存储了 deno 中会用到的二进制数据，可以跨线程传递数据的广播通道生产者和sharedArrayBuffer
-  // wasm 依赖信息，网络缓存、网络请求客户端，分析和翻译 node.js 代码，npm 的兼容和解析处理， 处理 TS 配置和类型检查，
-  // 构建模块的依赖关系，处理模块预加载需要的数据
+  // 内部存储了 deno 中会用到的二进制数据，可以跨线程传递数据的广播通道生产者和 sharedArrayBuffer
+  // WASM 依赖信息，网络缓存、网络请求客户端，分析和翻译 node.js 代码，npm 的兼容和解析处理， 处理 TS 配置和类型检查，
+  // 构建模块的依赖关系，处理模块以及预加载需要的数据等操作
   let ps = ProcState::from_flags(flags).await?;
 
   // Run a background task that checks for available upgrades. If an earlier
@@ -50,7 +50,7 @@ To grant permissions, set them before the script argument. For example:
     ps.dir.upgrade_check_file_path(),
   );
 
-  // 主入口模块
+  // 主入口模块，解析后返回一个 URL ，有多种解析模式，命令行标准输入、npm、远程、本地文件等
   let main_module = ps.options.resolve_main_module()?;
 
   // 获取运行的权限，具有内部可变性，可以跨线程，比如可以传递到 Web Worker
@@ -61,6 +61,7 @@ To grant permissions, set them before the script argument. For example:
   // 创建一个运行 js 程序的 worker
   let mut worker = create_main_worker(&ps, main_module, permissions).await?;
 
+  // 启动 worker 运行程序
   let exit_code = worker.run().await?;
   Ok(exit_code)
 }

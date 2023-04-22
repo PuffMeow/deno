@@ -189,6 +189,7 @@ impl ProcState {
   ) -> Result<Self, AnyError> {
     let dir = cli_options.resolve_deno_dir()?;
     let caches = Arc::new(Caches::default());
+    // 根据 CLI 模式预热知道的可能需要的缓存 
     // Warm up the caches we know we'll likely need based on the CLI mode
     match cli_options.sub_command() {
       DenoSubcommand::Run(_) => {
@@ -300,6 +301,7 @@ impl ProcState {
       .resolve_import_map(&file_fetcher)
       .await?
       .map(Arc::new);
+    // 是否开启了检测服务器，内部会创建一个异步 socket 服务，可以用来进行 debug
     let maybe_inspector_server =
       cli_options.resolve_inspector_server().map(Arc::new);
 
@@ -353,6 +355,7 @@ impl ProcState {
       cjs_esm_analyzer,
       npm_resolver.clone(),
     ));
+    // node 处理器
     let node_resolver = Arc::new(NodeResolver::new(npm_resolver.clone()));
     // 类型检查
     let type_checker = Arc::new(TypeChecker::new(
@@ -373,6 +376,7 @@ impl ProcState {
       file_fetcher.clone(),
       type_checker.clone(),
     ));
+    // 模块依赖图容器
     let graph_container: Arc<ModuleGraphContainer> = Default::default();
     // 准备模块加载
     let module_load_preparer = Arc::new(ModuleLoadPreparer::new(

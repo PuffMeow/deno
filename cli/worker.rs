@@ -254,38 +254,50 @@ pub async fn create_custom_worker(
   stdio: deno_runtime::deno_io::Stdio,
 ) -> Result<CliMainWorker, AnyError> {
   let (main_module, is_main_cjs) = if let Ok(package_ref) =
-    NpmPackageReqReference::from_specifier(&main_module)
-  {
+    // 从 npm 指示符解析出 name、version 等信息
+    NpmPackageReqReference::from_specifier(
+        &main_module,
+      ) {
+    // 往 npm resolver 中添加 npm package 依赖信息
     ps.npm_resolver
       .add_package_reqs(vec![package_ref.req.clone()])
       .await?;
     let node_resolution = ps
       .node_resolver
       .resolve_binary_export::<RealFs>(&package_ref)?;
+    // 判断主入口模块是否是 cjs 模块
     let is_main_cjs = matches!(node_resolution, NodeResolution::CommonJs(_));
     (node_resolution.into_url(), is_main_cjs)
   } else if ps.options.is_npm_main() {
+    // 判断是否是 npm 包
     let node_resolution = ps
       .node_resolver
       .url_to_node_resolution::<RealFs>(main_module)?;
+    // 判断是否是 cjs 模块
     let is_main_cjs = matches!(node_resolution, NodeResolution::CommonJs(_));
     (node_resolution.into_url(), is_main_cjs)
   } else {
+    // 不是 cjs 模块
     (main_module, false)
   };
 
+  // 创建模块加载器
   let module_loader = CliModuleLoader::new(
     ps.clone(),
     PermissionsContainer::allow_all(),
     permissions.clone(),
   );
 
+  // 是否开启了检测服务器
   let maybe_inspector_server = ps.maybe_inspector_server.clone();
 
+  // 创建 web_worker 回调
   let create_web_worker_cb =
     create_web_worker_callback(ps.clone(), stdio.clone());
+  // web_worker 预加载模块回调
   let web_worker_preload_module_cb =
     create_web_worker_preload_module_callback(ps.clone());
+  // web_worker 预执行模块回调
   let web_worker_pre_execute_module_cb =
     create_web_worker_pre_execute_module_callback(ps.clone());
 
@@ -303,9 +315,11 @@ pub async fn create_custom_worker(
       .join(checksum::gen(&[key.as_bytes()]))
   });
 
+  // 加载 npm 加载器拓展
   let mut extensions = ops::cli_exts(ps.npm_resolver.clone());
   extensions.append(&mut custom_extensions);
 
+  // worker 启动的配置
   let options = WorkerOptions {
     bootstrap: BootstrapOptions {
       args: ps.options.argv().clone(),
@@ -329,6 +343,7 @@ pub async fn create_custom_worker(
       inspect: ps.options.is_inspecting(),
     },
     extensions,
+    // 启动快照
     startup_snapshot: Some(crate::js::deno_isolate_init()),
     unsafely_ignore_certificate_errors: ps
       .options
@@ -356,6 +371,7 @@ pub async fn create_custom_worker(
     stdio,
   };
 
+  // 创建一个用于启动的主 worker
   let worker = MainWorker::bootstrap_from_options(
     main_module.clone(),
     permissions,
@@ -409,11 +425,13 @@ fn create_web_worker_callback(
   Arc::new(move |args| {
     let maybe_inspector_server = ps.maybe_inspector_server.clone();
 
+    // 模块加载器
     let module_loader = CliModuleLoader::new_for_worker(
       ps.clone(),
       args.parent_permissions.clone(),
       args.permissions.clone(),
     );
+    
     let create_web_worker_cb =
       create_web_worker_callback(ps.clone(), stdio.clone());
     let preload_module_cb =
