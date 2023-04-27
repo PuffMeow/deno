@@ -4,6 +4,7 @@ use crate::args::CliOptions;
 use crate::args::DenoSubcommand;
 use crate::args::Flags;
 use crate::args::Lockfile;
+use crate::args::StorageKeyResolver;
 use crate::args::TsConfigType;
 use crate::cache::Caches;
 use crate::cache::DenoDir;
@@ -16,10 +17,11 @@ use crate::file_fetcher::FileFetcher;
 use crate::graph_util::ModuleGraphBuilder;
 use crate::graph_util::ModuleGraphContainer;
 use crate::http_util::HttpClient;
+use crate::module_loader::CliModuleLoaderFactory;
 use crate::module_loader::ModuleLoadPreparer;
+use crate::module_loader::NpmModuleLoader;
 use crate::node::CliCjsEsmCodeAnalyzer;
 use crate::node::CliNodeCodeTranslator;
-use crate::node::CliNodeResolver;
 use crate::npm::create_npm_fs_resolver;
 use crate::npm::CliNpmRegistryApi;
 use crate::npm::CliNpmResolver;
@@ -30,19 +32,20 @@ use crate::resolver::CliGraphResolver;
 use crate::tools::check::TypeChecker;
 use crate::util::progress_bar::ProgressBar;
 use crate::util::progress_bar::ProgressBarStyle;
+use crate::worker::CliMainWorkerFactory;
+use crate::worker::CliMainWorkerOptions;
 
 use deno_core::error::AnyError;
 use deno_core::parking_lot::Mutex;
-use deno_core::CompiledWasmModuleStore;
 use deno_core::ModuleSpecifier;
-use deno_core::SharedArrayBufferStore;
 
-use deno_runtime::deno_broadcast_channel::InMemoryBroadcastChannel;
+use deno_runtime::deno_node;
 use deno_runtime::deno_node::analyze::NodeCodeTranslator;
 use deno_runtime::deno_node::NodeResolver;
 use deno_runtime::deno_tls::rustls::RootCertStore;
 use deno_runtime::deno_web::BlobStore;
 use deno_runtime::inspector_server::InspectorServer;
+use deno_semver::npm::NpmPackageReqReference;
 use import_map::ImportMap;
 use log::warn;
 use std::collections::HashSet;
@@ -72,16 +75,14 @@ pub struct Inner {
   pub maybe_inspector_server: Option<Arc<InspectorServer>>,
   pub root_cert_store: RootCertStore,
   pub blob_store: BlobStore,
-  pub broadcast_channel: InMemoryBroadcastChannel,
-  pub shared_array_buffer_store: SharedArrayBufferStore,
-  pub compiled_wasm_module_store: CompiledWasmModuleStore,
   pub parsed_source_cache: Arc<ParsedSourceCache>,
   pub resolver: Arc<CliGraphResolver>,
   maybe_file_watcher_reporter: Option<FileWatcherReporter>,
   pub module_graph_builder: Arc<ModuleGraphBuilder>,
   pub module_load_preparer: Arc<ModuleLoadPreparer>,
   pub node_code_translator: Arc<CliNodeCodeTranslator>,
-  pub node_resolver: Arc<CliNodeResolver>,
+  pub node_fs: Arc<dyn deno_node::NodeFs>,
+  pub node_resolver: Arc<NodeResolver>,
   pub npm_api: Arc<CliNpmRegistryApi>,
   pub npm_cache: Arc<NpmCache>,
   pub npm_resolver: Arc<CliNpmResolver>,
@@ -143,15 +144,13 @@ impl ProcState {
       maybe_inspector_server: self.maybe_inspector_server.clone(),
       root_cert_store: self.root_cert_store.clone(),
       blob_store: self.blob_store.clone(),
-      broadcast_channel: Default::default(),
-      shared_array_buffer_store: Default::default(),
-      compiled_wasm_module_store: Default::default(),
       parsed_source_cache: self.parsed_source_cache.clone(),
       resolver: self.resolver.clone(),
       maybe_file_watcher_reporter: self.maybe_file_watcher_reporter.clone(),
       module_graph_builder: self.module_graph_builder.clone(),
       module_load_preparer: self.module_load_preparer.clone(),
       node_code_translator: self.node_code_translator.clone(),
+      node_fs: self.node_fs.clone(),
       node_resolver: self.node_resolver.clone(),
       npm_api: self.npm_api.clone(),
       npm_cache: self.npm_cache.clone(),
@@ -206,14 +205,6 @@ impl ProcState {
 
     // 用于存储二进制数据，具有内部可变性
     let blob_store = BlobStore::default();
-    // 存储广播通道中的生产者，最大容量256，生产者可以跨线程传递
-    // 发送者中携带 id、name、data: Arc<Vec<u8>>(u8数组引用计数)，可以被消费者监听并消费
-    let broadcast_channel = InMemoryBroadcastChannel::default();
-    // 可以跨线程传递的 v8 sharedArrayBuffer
-    let shared_array_buffer_store = SharedArrayBufferStore::default();
-    // 解析后的 wasm module store
-    let compiled_wasm_module_store = CompiledWasmModuleStore::default();
-    // 依赖缓存的路径
     let deps_cache_location = dir.deps_folder_path();
     // 网络依赖缓存
     let http_cache = HttpCache::new(&deps_cache_location);
@@ -246,8 +237,8 @@ impl ProcState {
     // npm 仓库源地址，默认 https://registry.npmjs.org
     let npm_registry_url = CliNpmRegistryApi::default_url().to_owned();
     // npm 缓存配置
-    let npm_cache = Arc::new(NpmCache::from_deno_dir(
-      &dir,
+    let npm_cache = Arc::new(NpmCache::new(
+      dir.npm_folder_path(),
       cli_options.cache_setting(),
       http_client.clone(),
       progress_bar.clone(),
@@ -272,10 +263,12 @@ impl ProcState {
       npm_snapshot,
       lockfile.as_ref().cloned(),
     ));
+    let node_fs = Arc::new(deno_node::RealFs);
 
     // 创建 npm 文件处理器
     let npm_fs_resolver = create_npm_fs_resolver(
-      npm_cache,
+      node_fs.clone(),
+      npm_cache.clone(),
       &progress_bar,
       npm_registry_url,
       npm_resolution.clone(),
@@ -339,24 +332,21 @@ impl ProcState {
       emit_options,
     ));
     // npm 缓存
-    let npm_cache = Arc::new(NpmCache::from_deno_dir(
-      &dir,
-      cli_options.cache_setting(),
-      http_client.clone(),
-      progress_bar.clone(),
-    ));
     let file_fetcher = Arc::new(file_fetcher);
     // node 分析缓存
     let node_analysis_cache =
       NodeAnalysisCache::new(caches.node_analysis_db(&dir));
     let cjs_esm_analyzer = CliCjsEsmCodeAnalyzer::new(node_analysis_cache);
+    let node_resolver =
+      Arc::new(NodeResolver::new(node_fs.clone(), npm_resolver.clone()));
     // 翻译 node 代码
     let node_code_translator = Arc::new(NodeCodeTranslator::new(
       cjs_esm_analyzer,
+      node_fs.clone(),
+      node_resolver.clone(),
       npm_resolver.clone(),
     ));
     // node 处理器
-    let node_resolver = Arc::new(NodeResolver::new(npm_resolver.clone()));
     // 类型检查
     let type_checker = Arc::new(TypeChecker::new(
       dir.clone(),
@@ -405,14 +395,12 @@ impl ProcState {
       maybe_inspector_server,
       root_cert_store,
       blob_store,
-      broadcast_channel,
-      shared_array_buffer_store,
-      compiled_wasm_module_store,
       parsed_source_cache,
       resolver,
       maybe_file_watcher_reporter,
       module_graph_builder,
       node_code_translator,
+      node_fs,
       node_resolver,
       npm_api,
       npm_cache,
@@ -423,6 +411,73 @@ impl ProcState {
       module_load_preparer,
       progress_bar,
     })))
+  }
+
+  // todo(dsherret): this is a transitory method as we separate out
+  // ProcState from more code
+  pub fn into_cli_main_worker_factory(self) -> CliMainWorkerFactory {
+    CliMainWorkerFactory::new(
+      StorageKeyResolver::from_options(&self.options),
+      self.npm_resolver.clone(),
+      self.node_resolver.clone(),
+      self.graph_container.clone(),
+      self.blob_store.clone(),
+      CliModuleLoaderFactory::new(
+        &self.options,
+        self.emitter.clone(),
+        self.graph_container.clone(),
+        self.module_load_preparer.clone(),
+        self.parsed_source_cache.clone(),
+        self.resolver.clone(),
+        NpmModuleLoader::new(
+          self.cjs_resolutions.clone(),
+          self.node_code_translator.clone(),
+          self.node_resolver.clone(),
+        ),
+      ),
+      self.root_cert_store.clone(),
+      self.node_fs.clone(),
+      self.maybe_inspector_server.clone(),
+      CliMainWorkerOptions {
+        argv: self.options.argv().clone(),
+        debug: self
+          .options
+          .log_level()
+          .map(|l| l == log::Level::Debug)
+          .unwrap_or(false),
+        coverage_dir: self.options.coverage_dir(),
+        enable_testing_features: self.options.enable_testing_features(),
+        has_node_modules_dir: self.options.has_node_modules_dir(),
+        inspect_brk: self.options.inspect_brk().is_some(),
+        inspect_wait: self.options.inspect_wait().is_some(),
+        is_inspecting: self.options.is_inspecting(),
+        is_npm_main: self.options.is_npm_main(),
+        location: self.options.location_flag().clone(),
+        maybe_binary_npm_command_name: {
+          let mut maybe_binary_command_name = None;
+          if let DenoSubcommand::Run(flags) = self.options.sub_command() {
+            if let Ok(pkg_ref) = NpmPackageReqReference::from_str(&flags.script)
+            {
+              // if the user ran a binary command, we'll need to set process.argv[0]
+              // to be the name of the binary command instead of deno
+              let binary_name = pkg_ref
+                .sub_path
+                .as_deref()
+                .unwrap_or(pkg_ref.req.name.as_str());
+              maybe_binary_command_name = Some(binary_name.to_string());
+            }
+          }
+          maybe_binary_command_name
+        },
+        origin_data_folder_path: self.dir.origin_data_folder_path(),
+        seed: self.options.seed(),
+        unsafely_ignore_certificate_errors: self
+          .options
+          .unsafely_ignore_certificate_errors()
+          .clone(),
+        unstable: self.options.unstable(),
+      },
+    )
   }
 }
 

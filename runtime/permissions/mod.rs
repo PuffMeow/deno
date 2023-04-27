@@ -1873,7 +1873,7 @@ impl PermissionsContainer {
 
 impl deno_node::NodePermissions for PermissionsContainer {
   #[inline(always)]
-  fn check_read(&mut self, path: &Path) -> Result<(), AnyError> {
+  fn check_read(&self, path: &Path) -> Result<(), AnyError> {
     self.0.lock().read.check(path, None)
   }
 }

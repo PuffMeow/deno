@@ -35,16 +35,18 @@ use futures::channel::oneshot;
 use futures::future::poll_fn;
 use futures::future::Future;
 use futures::future::FutureExt;
+use futures::future::MaybeDone;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
+use futures::task::noop_waker;
 use futures::task::AtomicWaker;
 use smallvec::SmallVec;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::option::Option;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -52,8 +54,6 @@ use std::sync::Once;
 use std::task::Context;
 use std::task::Poll;
 use v8::OwnedIsolate;
-
-type PendingOpFuture = OpCall<(RealmIdx, PromiseId, OpId, OpResult)>;
 
 pub enum Snapshot {
   Static(&'static [u8]),
@@ -166,7 +166,7 @@ pub struct JsRuntimeState {
   dyn_module_evaluate_idle_counter: u32,
   pub(crate) source_map_getter: Option<Rc<Box<dyn SourceMapGetter>>>,
   pub(crate) source_map_cache: Rc<RefCell<SourceMapCache>>,
-  pub(crate) pending_ops: FuturesUnordered<PendingOpFuture>,
+  pub(crate) pending_ops: FuturesUnordered<OpCall>,
   pub(crate) have_unpolled_ops: bool,
   pub(crate) op_state: Rc<RefCell<OpState>>,
   pub(crate) shared_array_buffer_store: Option<SharedArrayBufferStore>,
@@ -176,7 +176,7 @@ pub struct JsRuntimeState {
   /// instead of any other exceptions.
   // TODO(nayeemrmn): This is polled in `exception_to_err_result()` which is
   // flimsy. Try to poll it similarly to `pending_promise_rejections`.
-  pub(crate) dispatched_exceptions: VecDeque<v8::Global<v8::Value>>,
+  pub(crate) dispatched_exception: Option<v8::Global<v8::Value>>,
   pub(crate) inspector: Option<Rc<RefCell<JsRuntimeInspector>>>,
   waker: AtomicWaker,
 }
@@ -360,7 +360,7 @@ impl JsRuntime {
       op_state: op_state.clone(),
       waker: AtomicWaker::new(),
       have_unpolled_ops: false,
-      dispatched_exceptions: Default::default(),
+      dispatched_exception: None,
       // Some fields are initialized later after isolate is created
       inspector: None,
       global_realm: None,
@@ -372,7 +372,7 @@ impl JsRuntime {
       .into_iter()
       .enumerate()
       .map(|(id, decl)| {
-        OpCtx::new(id, 0, Rc::new(decl), op_state.clone(), weak.clone())
+        OpCtx::new(id as u16, 0, Rc::new(decl), op_state.clone(), weak.clone())
       })
       .collect::<Vec<_>>()
       .into_boxed_slice();
@@ -483,6 +483,26 @@ impl JsRuntime {
       #[cfg(feature = "include_js_files_for_snapshotting")]
       if snapshot_options != snapshot_util::SnapshotOptions::None {
         for source in &esm_sources {
+          use crate::ExtensionFileSourceCode;
+          if let ExtensionFileSourceCode::LoadedFromFsDuringSnapshot(path) =
+            &source.code
+          {
+            println!("cargo:rerun-if-changed={}", path.display())
+          }
+        }
+      }
+      // Cache bust plain JS (non-ES modules as well)
+      #[cfg(feature = "include_js_files_for_snapshotting")]
+      if snapshot_options != snapshot_util::SnapshotOptions::None {
+        let js_sources = options
+          .extensions
+          .iter()
+          .flat_map(|ext| match ext.get_js_sources() {
+            Some(s) => s.to_owned(),
+            None => vec![],
+          })
+          .collect::<Vec<ExtensionFileSource>>();
+        for source in js_sources {
           use crate::ExtensionFileSourceCode;
           if let ExtensionFileSourceCode::LoadedFromFsDuringSnapshot(path) =
             &source.code
@@ -602,7 +622,7 @@ impl JsRuntime {
   /// constructed.
   pub fn create_realm(&mut self) -> Result<JsRealm, Error> {
     let realm = {
-      let realm_idx = self.state.borrow().known_realms.len();
+      let realm_idx = self.state.borrow().known_realms.len() as u16;
 
       let op_ctxs: Box<[OpCtx]> = self
         .global_realm()
@@ -937,6 +957,27 @@ impl JsRuntime {
     )
   }
 
+  /// Call a function. If it returns a promise, run the event loop until that
+  /// promise is settled. If the promise rejects or there is an uncaught error
+  /// in the event loop, return `Err(error)`. Or return `Ok(<await returned>)`.
+  pub async fn call_and_await(
+    &mut self,
+    function: &v8::Global<v8::Function>,
+  ) -> Result<v8::Global<v8::Value>, Error> {
+    let promise = {
+      let scope = &mut self.handle_scope();
+      let cb = function.open(scope);
+      let this = v8::undefined(scope).into();
+      let promise = cb.call(scope, this, &[]);
+      if promise.is_none() || scope.is_execution_terminating() {
+        let undefined = v8::undefined(scope).into();
+        return exception_to_err_result(scope, undefined, false);
+      }
+      v8::Global::new(scope, promise.unwrap())
+    };
+    self.resolve_value(promise).await
+  }
+
   /// Takes a snapshot. The isolate should have been created with will_snapshot
   /// set to true.
   ///
@@ -1186,7 +1227,7 @@ impl JsRuntime {
 
     if has_inspector {
       // We poll the inspector first.
-      let _ = self.inspector().borrow_mut().poll_unpin(cx);
+      let _ = self.inspector().borrow().poll_sessions(Some(cx)).unwrap();
     }
 
     self.pump_v8_message_loop()?;
@@ -1509,19 +1550,14 @@ pub(crate) fn exception_to_err_result<T>(
     // to use the exception that was passed to it rather than the exception that
     // was passed to this function.
     let state = state_rc.borrow();
-    exception = state
-      .dispatched_exceptions
-      .back()
-      .map(|exception| v8::Local::new(scope, exception.clone()))
-      .unwrap_or_else(|| {
-        // Maybe make a new exception object.
-        if was_terminating_execution && exception.is_null_or_undefined() {
-          let message = v8::String::new(scope, "execution terminated").unwrap();
-          v8::Exception::error(scope, message)
-        } else {
-          exception
-        }
-      });
+    exception = if let Some(exception) = &state.dispatched_exception {
+      v8::Local::new(scope, exception.clone())
+    } else if was_terminating_execution && exception.is_null_or_undefined() {
+      let message = v8::String::new(scope, "execution terminated").unwrap();
+      v8::Exception::error(scope, message)
+    } else {
+      exception
+    };
   }
 
   let mut js_error = JsError::from_v8_exception(scope, exception);
@@ -1729,7 +1765,7 @@ impl JsRuntime {
     status = module.get_status();
 
     let has_dispatched_exception =
-      !state_rc.borrow_mut().dispatched_exceptions.is_empty();
+      state_rc.borrow_mut().dispatched_exception.is_some();
     if has_dispatched_exception {
       // This will be overrided in `exception_to_err_result()`.
       let exception = v8::undefined(tc_scope).into();
@@ -2223,7 +2259,7 @@ impl JsRuntime {
       {
         let (realm_idx, promise_id, op_id, resp) = item;
         state.op_state.borrow().tracker.track_async_completed(op_id);
-        responses_per_realm[realm_idx].push((promise_id, resp));
+        responses_per_realm[realm_idx as usize].push((promise_id, resp));
       }
     }
 
@@ -2327,7 +2363,7 @@ impl JsRuntime {
       {
         let (realm_idx, promise_id, op_id, mut resp) = item;
         debug_assert_eq!(
-          state.known_realms[realm_idx],
+          state.known_realms[realm_idx as usize],
           state.global_realm.as_ref().unwrap().context()
         );
         realm_state.unrefed_ops.remove(&promise_id);
@@ -2374,27 +2410,106 @@ impl JsRuntime {
 }
 
 #[inline]
-pub fn queue_fast_async_op(
+pub fn queue_fast_async_op<R: serde::Serialize + 'static>(
   ctx: &OpCtx,
-  op: impl Future<Output = (RealmIdx, PromiseId, OpId, OpResult)> + 'static,
+  promise_id: PromiseId,
+  op: impl Future<Output = Result<R, Error>> + 'static,
 ) {
   let runtime_state = match ctx.runtime_state.upgrade() {
     Some(rc_state) => rc_state,
     // atleast 1 Rc is held by the JsRuntime.
     None => unreachable!(),
   };
-
+  let get_class = {
+    let state = RefCell::borrow(&ctx.state);
+    state.tracker.track_async(ctx.id);
+    state.get_error_class_fn
+  };
+  let fut = op
+    .map(|result| crate::_ops::to_op_result(get_class, result))
+    .boxed_local();
   let mut state = runtime_state.borrow_mut();
-  state.pending_ops.push(OpCall::lazy(op));
+  state
+    .pending_ops
+    .push(OpCall::pending(ctx, promise_id, fut));
   state.have_unpolled_ops = true;
 }
 
 #[inline]
+pub fn map_async_op1<R: serde::Serialize + 'static>(
+  ctx: &OpCtx,
+  op: impl Future<Output = Result<R, Error>> + 'static,
+) -> MaybeDone<Pin<Box<dyn Future<Output = OpResult>>>> {
+  let get_class = {
+    let state = RefCell::borrow(&ctx.state);
+    state.tracker.track_async(ctx.id);
+    state.get_error_class_fn
+  };
+
+  let fut = op
+    .map(|result| crate::_ops::to_op_result(get_class, result))
+    .boxed_local();
+  MaybeDone::Future(fut)
+}
+
+#[inline]
+pub fn map_async_op2<R: serde::Serialize + 'static>(
+  ctx: &OpCtx,
+  op: impl Future<Output = R> + 'static,
+) -> MaybeDone<Pin<Box<dyn Future<Output = OpResult>>>> {
+  let state = RefCell::borrow(&ctx.state);
+  state.tracker.track_async(ctx.id);
+
+  let fut = op.map(|result| OpResult::Ok(result.into())).boxed_local();
+  MaybeDone::Future(fut)
+}
+
+#[inline]
+pub fn map_async_op3<R: serde::Serialize + 'static>(
+  ctx: &OpCtx,
+  op: Result<impl Future<Output = Result<R, Error>> + 'static, Error>,
+) -> MaybeDone<Pin<Box<dyn Future<Output = OpResult>>>> {
+  let get_class = {
+    let state = RefCell::borrow(&ctx.state);
+    state.tracker.track_async(ctx.id);
+    state.get_error_class_fn
+  };
+
+  match op {
+    Err(err) => MaybeDone::Done(OpResult::Err(OpError::new(get_class, err))),
+    Ok(fut) => MaybeDone::Future(
+      fut
+        .map(|result| crate::_ops::to_op_result(get_class, result))
+        .boxed_local(),
+    ),
+  }
+}
+
+#[inline]
+pub fn map_async_op4<R: serde::Serialize + 'static>(
+  ctx: &OpCtx,
+  op: Result<impl Future<Output = R> + 'static, Error>,
+) -> MaybeDone<Pin<Box<dyn Future<Output = OpResult>>>> {
+  let get_class = {
+    let state = RefCell::borrow(&ctx.state);
+    state.tracker.track_async(ctx.id);
+    state.get_error_class_fn
+  };
+
+  match op {
+    Err(err) => MaybeDone::Done(OpResult::Err(OpError::new(get_class, err))),
+    Ok(fut) => MaybeDone::Future(
+      fut.map(|result| OpResult::Ok(result.into())).boxed_local(),
+    ),
+  }
+}
+
 pub fn queue_async_op<'s>(
   ctx: &OpCtx,
   scope: &'s mut v8::HandleScope,
   deferred: bool,
-  op: impl Future<Output = (RealmIdx, PromiseId, OpId, OpResult)> + 'static,
+  promise_id: PromiseId,
+  mut op: MaybeDone<Pin<Box<dyn Future<Output = OpResult>>>>,
 ) -> Option<v8::Local<'s, v8::Value>> {
   let runtime_state = match ctx.runtime_state.upgrade() {
     Some(rc_state) => rc_state,
@@ -2407,32 +2522,40 @@ pub fn queue_async_op<'s>(
   // deno_core doesn't currently support such exposure, even though embedders
   // can cause them, so we panic in debug mode (since the check is expensive).
   debug_assert_eq!(
-    runtime_state.borrow().known_realms[ctx.realm_idx].to_local(scope),
+    runtime_state.borrow().known_realms[ctx.realm_idx as usize].to_local(scope),
     Some(scope.get_current_context())
   );
 
-  match OpCall::eager(op) {
-    // If the result is ready we'll just return it straight to the caller, so
-    // we don't have to invoke a JS callback to respond. // This works under the
-    // assumption that `()` return value is serialized as `null`.
-    EagerPollResult::Ready((_, _, op_id, mut resp)) if !deferred => {
-      let resp = resp.to_v8(scope).unwrap();
-      ctx.state.borrow_mut().tracker.track_async_completed(op_id);
-      return Some(resp);
-    }
-    EagerPollResult::Ready(op) => {
-      let ready = OpCall::ready(op);
-      let mut state = runtime_state.borrow_mut();
-      state.pending_ops.push(ready);
-      state.have_unpolled_ops = true;
-    }
-    EagerPollResult::Pending(op) => {
-      let mut state = runtime_state.borrow_mut();
-      state.pending_ops.push(op);
-      state.have_unpolled_ops = true;
-    }
-  }
+  // All ops are polled immediately
+  let waker = noop_waker();
+  let mut cx = Context::from_waker(&waker);
 
+  // Note that MaybeDone returns () from the future
+  let op_call = match op.poll_unpin(&mut cx) {
+    Poll::Pending => {
+      let MaybeDone::Future(fut) = op else {
+        unreachable!()
+      };
+      OpCall::pending(ctx, promise_id, fut)
+    }
+    Poll::Ready(_) => {
+      let mut op_result = Pin::new(&mut op).take_output().unwrap();
+      // If the op is ready and is not marked as deferred we can immediately return
+      // the result.
+      if !deferred {
+        ctx.state.borrow_mut().tracker.track_async_completed(ctx.id);
+        return Some(op_result.to_v8(scope).unwrap());
+      }
+
+      OpCall::ready(ctx, promise_id, op_result)
+    }
+  };
+
+  // Otherwise we will push it to the `pending_ops` and let it be polled again
+  // or resolved on the next tick of the event loop.
+  let mut state = runtime_state.borrow_mut();
+  state.pending_ops.push(op_call);
+  state.have_unpolled_ops = true;
   None
 }
 
@@ -2563,7 +2686,7 @@ pub mod tests {
       .execute_script_static(
         "filename.js",
         r#"
-        
+
         var promiseIdSymbol = Symbol.for("Deno.core.internalPromiseId");
         var p1 = Deno.core.opAsync("op_test", 42);
         var p2 = Deno.core.opAsync("op_test", 42);
@@ -2619,7 +2742,7 @@ pub mod tests {
         "filename.js",
         r#"
         let control = 42;
-        
+
         Deno.core.opAsync("op_test", control);
         async function main() {
           Deno.core.opAsync("op_test", control);
@@ -2638,7 +2761,7 @@ pub mod tests {
       .execute_script_static(
         "filename.js",
         r#"
-        
+
         const p = Deno.core.opAsync("op_test", 42);
         if (p[Symbol.for("Deno.core.internalPromiseId")] == undefined) {
           throw new Error("missing id on returned promise");
@@ -2655,7 +2778,7 @@ pub mod tests {
       .execute_script_static(
         "filename.js",
         r#"
-        
+
         Deno.core.opAsync("op_test");
         "#,
       )
@@ -2670,7 +2793,7 @@ pub mod tests {
       .execute_script_static(
         "filename.js",
         r#"
-        
+
         let zero_copy_a = new Uint8Array([0]);
         Deno.core.opAsync2("op_test", null, zero_copy_a);
         "#,
@@ -3177,7 +3300,7 @@ pub mod tests {
   #[test]
   fn test_heap_limits() {
     let create_params =
-      v8::Isolate::create_params().heap_limits(0, 3 * 1024 * 1024);
+      v8::Isolate::create_params().heap_limits(0, 5 * 1024 * 1024);
     let mut runtime = JsRuntime::new(RuntimeOptions {
       create_params: Some(create_params),
       ..Default::default()
@@ -3221,7 +3344,7 @@ pub mod tests {
   #[test]
   fn test_heap_limit_cb_multiple() {
     let create_params =
-      v8::Isolate::create_params().heap_limits(0, 3 * 1024 * 1024);
+      v8::Isolate::create_params().heap_limits(0, 5 * 1024 * 1024);
     let mut runtime = JsRuntime::new(RuntimeOptions {
       create_params: Some(create_params),
       ..Default::default()
@@ -3832,7 +3955,7 @@ Deno.core.opAsync("op_async_serialize_object_with_numbers_as_keys", {
       .execute_script_static(
         "macrotasks_and_nextticks.js",
         r#"
-        
+
         (async function () {
           const results = [];
           Deno.core.setMacrotaskCallback(() => {
@@ -4070,7 +4193,7 @@ Deno.core.opAsync("op_async_serialize_object_with_numbers_as_keys", {
           "",
           format!(
             r#"
-              
+
               globalThis.rejectValue = undefined;
               Deno.core.setPromiseRejectCallback((_type, _promise, reason) => {{
                 globalThis.rejectValue = `{realm_name}/${{reason}}`;
@@ -4289,7 +4412,7 @@ Deno.core.opAsync("op_async_serialize_object_with_numbers_as_keys", {
             let sum = Deno.core.ops.op_sum_take(w32.subarray(0, 2));
             return false;
           } catch(e) {
-            return e.message.includes('invalid type, expected: detachable');
+            return e.message.includes('invalid type; expected: detachable');
           }
         });
         if (!assertWasmThrow()) {
@@ -4508,7 +4631,7 @@ Deno.core.opAsync("op_async_serialize_object_with_numbers_as_keys", {
           runtime.v8_isolate(),
           "",
           r#"
-            
+
             (async function () {
               const buf = await Deno.core.opAsync("op_test", false);
               let err;
@@ -4561,7 +4684,7 @@ Deno.core.opAsync("op_async_serialize_object_with_numbers_as_keys", {
           runtime.v8_isolate(),
           "",
           r#"
-            
+
             var promise = Deno.core.opAsync("op_pending");
           "#,
         )
@@ -4571,7 +4694,7 @@ Deno.core.opAsync("op_async_serialize_object_with_numbers_as_keys", {
           runtime.v8_isolate(),
           "",
           r#"
-            
+
             var promise = Deno.core.opAsync("op_pending");
           "#,
         )

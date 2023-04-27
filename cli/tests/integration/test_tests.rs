@@ -77,6 +77,12 @@ itest!(test_with_config2 {
   output: "test/collect2.out",
 });
 
+itest!(test_with_deprecated_config {
+  args: "test --config test/collect/deno.deprecated.jsonc test/collect",
+  exit_code: 0,
+  output: "test/collect.deprecated.out",
+});
+
 itest!(test_with_malformed_config {
   args: "test --config test/collect/deno.malformed.jsonc",
   exit_code: 1,
@@ -216,7 +222,7 @@ itest!(ops_sanitizer_timeout_failure {
 });
 
 itest!(ops_sanitizer_multiple_timeout_tests {
-  args: "test --trace-ops test/ops_sanitizer_multiple_timeout_tests.ts",
+  args: "test --trace-ops --enable-testing-features-do-not-use test/ops_sanitizer_multiple_timeout_tests.ts",
   exit_code: 1,
   output: "test/ops_sanitizer_multiple_timeout_tests.out",
 });
@@ -390,7 +396,7 @@ fn recursive_permissions_pledge() {
   let context = TestContext::default();
   let output = context
     .new_command()
-    .args("test test/recursive_permissions_pledge.js")
+    .args("test --enable-testing-features-do-not-use test/recursive_permissions_pledge.js")
     .run();
   output.assert_exit_code(1);
   assert_contains!(
@@ -416,6 +422,12 @@ fn file_protocol() {
 itest!(uncaught_errors {
   args: "test --quiet test/uncaught_errors_1.ts test/uncaught_errors_2.ts test/uncaught_errors_3.ts",
   output: "test/uncaught_errors.out",
+  exit_code: 1,
+});
+
+itest!(report_error {
+  args: "test --quiet test/report_error.ts",
+  output: "test/report_error.out",
   exit_code: 1,
 });
 
